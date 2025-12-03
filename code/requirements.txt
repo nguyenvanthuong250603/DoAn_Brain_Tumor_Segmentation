@@ -1,0 +1,13 @@
+streamlit
+numpy
+h5py
+torch
+torchvision
+opencv-python-headless
+Pillow
+scikit-image
+plotly
+google-generativeai
+python-dotenv
+nibabel
+tensorflow
