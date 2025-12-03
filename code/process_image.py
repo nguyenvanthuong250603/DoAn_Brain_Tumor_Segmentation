@@ -104,7 +104,9 @@ def create_overlay(bg_img, mask_img, alpha=0.4):
 # ============================================================================
 def predict_whole_volume(model, device, vol_data, batch_size=16):
     """
-    Dự đoán toàn bộ volume 3D, có áp dụng lọc nhiễu.
+    Dự đoán toàn bộ volume 3D với cơ chế AN TOÀN:
+    1. Bỏ qua các lát đầu/cuối (thường gây nhiễu).
+    2. Chỉ giữ lại dự đoán nếu vùng đó thực sự có não (dựa trên ảnh T1).
     """
     depth = vol_data["flair"].shape[-1]
 
@@ -116,21 +118,36 @@ def predict_whole_volume(model, device, vol_data, batch_size=16):
     status_text = st.empty()
     model.eval()
 
+    # --- CẤU HÌNH AN TOÀN ---
+    SKIP_SLICES = 15  # Bỏ qua 15 lát đầu và 15 lát cuối để tránh lỗi "tấm thớt đỏ"
+
     # --- BƯỚC 1: DỰ ĐOÁN TỪNG BATCH ---
     for i in range(0, depth, batch_size):
         end = min(i + batch_size, depth)
         batch_frames = []
+        valid_indices = []  # Lưu lại index của các lát hợp lệ để gán lại sau
 
         # Chuẩn bị batch
         for idx in range(i, end):
-            # Lấy slice và Resize
-            # ⚠️ QUAN TRỌNG: Cần chuẩn hóa Z-Score trước khi đưa vào model
+            # Lưu T1 gốc để vẽ não
+            t1_original = cv2.resize(
+                vol_data["t1"][:, :, idx], (TARGET_SIZE, TARGET_SIZE)
+            )
+            full_brain_3d[:, :, idx] = t1_original
+
+            # 🛠️ FIX 1: Nếu là lát đầu hoặc lát cuối -> Bỏ qua, không dự đoán
+            if idx < SKIP_SLICES or idx > (depth - SKIP_SLICES):
+                continue
+
+            # 🛠️ FIX 2: Nếu ảnh quá tối (không có não) -> Bỏ qua
+            if np.max(t1_original) < 0.01:
+                continue
+
+            # Chuẩn hóa và đưa vào batch
             s_flair = zscore_normalization(
                 cv2.resize(vol_data["flair"][:, :, idx], (TARGET_SIZE, TARGET_SIZE))
             )
-            s_t1 = zscore_normalization(
-                cv2.resize(vol_data["t1"][:, :, idx], (TARGET_SIZE, TARGET_SIZE))
-            )
+            s_t1 = zscore_normalization(t1_original)  # Đã resize ở trên
             s_t1ce = zscore_normalization(
                 cv2.resize(vol_data["t1ce"][:, :, idx], (TARGET_SIZE, TARGET_SIZE))
             )
@@ -138,42 +155,40 @@ def predict_whole_volume(model, device, vol_data, batch_size=16):
                 cv2.resize(vol_data["t2"][:, :, idx], (TARGET_SIZE, TARGET_SIZE))
             )
 
-            # Lưu lại T1 slice (chưa chuẩn hóa hoặc chuẩn hóa nhẹ để hiển thị vỏ não)
-            # Ở đây ta lưu bản gốc resize để vẽ vỏ não cho đẹp
-            t1_original = cv2.resize(
-                vol_data["t1"][:, :, idx], (TARGET_SIZE, TARGET_SIZE)
-            )
-            full_brain_3d[:, :, idx] = t1_original
-
             stack = np.stack([s_flair, s_t1, s_t1ce, s_t2], axis=0).astype(np.float32)
             batch_frames.append(stack)
+            valid_indices.append(idx)
 
         if not batch_frames:
             continue
 
+        # Đưa vào model
         batch_tensor = torch.from_numpy(np.array(batch_frames)).to(device)
         with torch.no_grad():
             output = model(batch_tensor)
             preds = torch.argmax(output, dim=1).cpu().numpy()  # (Batch, H, W)
 
-        # Lưu kết quả vào mảng 3D tạm thời
+        # Lưu kết quả vào mảng 3D (Chỉ lưu vào đúng vị trí valid)
         for k, p in enumerate(preds):
-            slice_idx = i + k
-            full_mask_3d[:, :, slice_idx] = p
+            real_idx = valid_indices[k]
+
+            # 🛠️ FIX 3: MASKING (Quan trọng nhất)
+            # Chỉ chấp nhận khối u nếu tại đó ảnh não (T1) không phải màu đen
+            # Điều này xóa sổ hoàn toàn lỗi dự đoán u bay lơ lửng ngoài hộp sọ
+            brain_mask = full_brain_3d[:, :, real_idx] > 0.1  # Ngưỡng nhẹ để tách nền
+
+            # Gán kết quả đã lọc vào mask 3D
+            full_mask_3d[:, :, real_idx] = p * brain_mask.astype(np.uint8)
 
         progress_bar.progress(min(end / depth, 1.0))
         status_text.text(f"Đang dự đoán layer: {end}/{depth}")
 
     # --- BƯỚC 2: HẬU XỬ LÝ (LỌC NHIỄU) ---
-    status_text.text("Đang lọc nhiễu và tính toán thể tích...")
-
-    # Gọi hàm lọc rác để xóa các khối u rời rạc
+    status_text.text("Đang lọc nhiễu 3D...")
     clean_mask_3d = clean_segmentation_3d(full_mask_3d)
 
-    # --- BƯỚC 3: TÍNH TOÁN THỂ TÍCH TRÊN MASK ĐÃ LỌC ---
+    # --- BƯỚC 3: TÍNH TOÁN THỂ TÍCH ---
     total_mm3 = {"NCR": 0.0, "ED": 0.0, "ET": 0.0, "TOTAL": 0.0}
-
-    # Duyệt qua toàn bộ volume 3D đã làm sạch để cộng dồn thể tích
     unique, counts = np.unique(clean_mask_3d, return_counts=True)
     stats_all = dict(zip(unique, counts))
 
@@ -185,9 +200,7 @@ def predict_whole_volume(model, device, vol_data, batch_size=16):
     status_text.empty()
     progress_bar.empty()
 
-    final_stats = {k: v / 1000.0 for k, v in total_mm3.items()}  # Đổi sang cm3
-
-    # Trả về mask đã làm sạch
+    final_stats = {k: v / 1000.0 for k, v in total_mm3.items()}
     return final_stats, clean_mask_3d, full_brain_3d
 
 
