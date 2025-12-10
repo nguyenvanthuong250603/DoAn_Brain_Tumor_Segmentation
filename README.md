@@ -42,7 +42,7 @@ Sử dụng **U-Net** – một CNN encoder-decoder với skip-connections, phù
 
 ```bash
 git clone https://github.com/nguyenvanthuong250603/DoAn_Brain_Tumor_Segmentation.git
-cd brain_tumor_segmentation
+cd brain_tumor_segmentation\code
 pip install -r requirements.txt
 ```
 
