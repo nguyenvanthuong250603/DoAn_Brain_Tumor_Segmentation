@@ -1,0 +1,20 @@
+version: "3.9"
+
+services:
+  streamlit:
+    build: .
+    container_name: streamlit_ai
+    ports:
+      - "8082:8000"
+    volumes:
+      # Map toàn bộ thư mục hiện tại (.) vào thư mục làm việc (/app) trong container
+      # Giúp sửa code (app.py, process_image.py...) là ăn ngay
+      - .:/code
+
+      # Lưu ý: Nếu muốn an toàn cho thư mục model và data thì map riêng cũng được,
+      # nhưng map dòng trên là đã bao gồm tất cả rồi.
+
+    # Bỏ qua venv của máy thật để tránh xung đột với linux trong docker
+    # (Cần kết hợp với file .dockerignore mình đã nhắc ở câu trước)
+
+    restart: unless-stopped
