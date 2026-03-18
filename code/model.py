@@ -8,7 +8,7 @@ import streamlit as st
 
 load_dotenv()
 
-MODEL_PATH = r"E:\Ki9_2025\brain_tumor_segmentation\code\models\best_unet_epoch032.pth"
+MODEL_PATH = r".\models\best_unet_epoch032.pth"
 
 
 # ===========================================================
@@ -159,3 +159,7 @@ def get_model():
         return model, device
     except Exception as e:
         return None, str(e)
+
+
+def test_print():
+    print("Model loaded successfully!")

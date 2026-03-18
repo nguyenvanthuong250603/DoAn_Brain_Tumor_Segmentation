@@ -1,0 +1,23 @@
+# Bỏ qua môi trường ảo của máy thật (QUAN TRỌNG NHẤT)
+
+venv/
+env/
+.env
+.venv
+
+# Bỏ qua các file rác của Python
+
+**pycache**/
+_.pyc
+_.pyo
+\*.pyd
+
+# Bỏ qua Git
+
+.git/
+.gitignore
+
+# Bỏ qua dữ liệu và model (vì mình đã dùng Volume để map vào rồi, không cần copy lúc build cho nặng)
+
+Data_Test/
+models/
